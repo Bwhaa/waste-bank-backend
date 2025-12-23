@@ -1,0 +1,251 @@
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+// =========================================================================
+// ENUMS
+// =========================================================================
+
+enum UserRole {
+  MEMBER
+  STAFF
+  ADMIN
+  SUPER_ADMIN
+  AUDITOR
+}
+
+enum MemberStatus {
+  ACTIVE
+  INACTIVE
+  SUSPENDED
+  BANNED
+}
+
+enum PointTransactionType {
+  EARN_DEPOSIT
+  EARN_CAMPAIGN
+  ADJUSTMENT_ADD
+  REFUND_REDEMPTION
+  SPEND_REDEMPTION
+  POINT_EXPIRED
+  ADJUSTMENT_DEDUCT
+}
+
+enum RedemptionStatus {
+  REQUESTED
+  PREPARING
+  COMPLETED
+  CANCELLED
+  REJECTED
+  FAILED
+}
+
+enum DepositStatus {
+  PENDING
+  COMPLETED
+  CANCELLED
+  DISPUTED
+}
+
+enum WasteCategory {
+  PLASTIC
+  GLASS
+  PAPER
+  METAL
+  ORGANIC
+  HAZARDOUS
+  GENERAL
+}
+
+enum MeasureUnit {
+  KG
+  GRAM
+  PIECE
+  LITER
+}
+
+// =========================================================================
+// MODELS
+// =========================================================================
+
+model Member {
+  id       String  @id @default(uuid())
+  
+  // Auth fields
+  lineId   String? @unique @map("line_id")
+  email    String? @unique 
+  password String?         
+  
+  // 🔥 แก้ให้ตรงกับ Seed: แยกชื่อ-นามสกุล และเพิ่มเบอร์โทร
+  firstName String  @map("first_name")
+  lastName  String  @map("last_name")
+  phoneNumber String? @map("phone_number")
+  
+  qrCode   String? @unique @map("qr_code") // ใส่ ? เผื่อไว้ก่อนตอน Seed ยังไม่มี QR
+
+  role   UserRole     @default(MEMBER)
+  status MemberStatus @default(ACTIVE)
+
+  currentPoints Int @default(0) @map("current_points")
+  version       Int @default(0)
+
+  isActive  Boolean   @default(true) @map("is_active")
+  deletedAt DateTime? @map("deleted_at")
+
+  deposits      Deposit[]
+  pointTxs      PointTransaction[]
+  redemptions   RewardRedemption[]
+  refreshTokens RefreshToken[] 
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([role])
+  @@index([status])
+  @@map("members")
+}
+
+model RefreshToken {
+  id        String   @id @default(uuid())
+  token     String   @unique 
+  memberId  String   @map("member_id")
+  
+  member    Member   @relation(fields: [memberId], references: [id], onDelete: Cascade)
+  
+  expiresAt DateTime @map("expires_at")
+  createdAt DateTime @default(now()) @map("created_at")
+  isRevoked Boolean  @default(false) @map("is_revoked")
+
+  @@index([memberId])
+  @@map("refresh_tokens")
+}
+
+model WasteType {
+  id        Int            @id @default(autoincrement())
+  name      String         @unique
+  
+  // 🔥 ใส่ Default ให้ Category เพื่อให้ Seed ผ่าน (เพราะ Seed ไม่ได้ระบุหมวดหมู่)
+  category  WasteCategory  @default(GENERAL)
+
+  pointRate    Decimal  @db.Decimal(10, 2) @map("point_rate")
+  marketPrice  Decimal? @db.Decimal(10, 2) @map("market_price")
+
+  unit       MeasureUnit @default(KG)
+  minAmount  Decimal     @default(0.1) @db.Decimal(10, 2) @map("min_amount")
+
+  description String?
+  imageUrl    String? @map("image_url")
+
+  isActive Boolean @default(true) @map("is_active")
+
+  deposits Deposit[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("waste_types")
+}
+
+model Deposit {
+  id          String @id @default(uuid())
+  memberId    String @map("member_id")
+  wasteTypeId Int    @map("waste_type_id")
+
+  amount      Decimal @db.Decimal(10, 2)
+  pointEarned Int     @map("point_earned")
+
+  status DepositStatus @default(PENDING)
+  note   String?
+
+  member    Member    @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  wasteType WasteType @relation(fields: [wasteTypeId], references: [id], onDelete: Restrict)
+
+  transaction PointTransaction?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([memberId, createdAt])
+  @@index([status])
+  @@map("deposits")
+}
+
+model PointTransaction {
+  id       String @id @default(uuid())
+  memberId String @map("member_id")
+
+  type         PointTransactionType
+  amount       Int
+  balanceAfter Int? @map("balance_after")
+
+  detail String?
+
+  depositId    String? @unique @map("deposit_id")
+  redemptionId String? @unique @map("redemption_id")
+  
+  isExpiredProcessed Boolean @default(false) @map("is_expired_processed")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+
+  deposit    Deposit?          @relation(fields: [depositId], references: [id])
+  redemption RewardRedemption? @relation(fields: [redemptionId], references: [id])
+
+  expiresAt DateTime? @map("expires_at")
+  createdAt DateTime  @default(now()) @map("created_at")
+  createdBy String?   @map("created_by")
+
+  @@index([memberId, type])
+  @@index([memberId, expiresAt])
+  @@index([createdAt])
+  @@map("point_transactions")
+}
+
+model Reward {
+  id        Int    @id @default(autoincrement())
+  name      String
+  
+  // 🔥 เพิ่มให้ตรงกับ Seed
+  description String?
+  imageUrl    String? @map("image_url")
+  
+  costPoint Int    @map("cost_point")
+  stock     Int
+  version   Int    @default(0)
+
+  isActive  Boolean   @default(true) @map("is_active")
+  deletedAt DateTime? @map("deleted_at")
+
+  redemptions RewardRedemption[]
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@map("rewards")
+}
+
+model RewardRedemption {
+  id       String @id @default(uuid())
+  memberId String @map("member_id")
+  rewardId Int    @map("reward_id")
+
+  pointUsed    Int              @map("point_used")
+  status       RedemptionStatus @default(REQUESTED)
+  processedBy  String?          @map("processed_by")
+
+  member Member @relation(fields: [memberId], references: [id], onDelete: Restrict)
+  reward Reward @relation(fields: [rewardId], references: [id], onDelete: Restrict)
+
+  transaction PointTransaction?
+
+  createdAt DateTime @default(now()) @map("created_at")
+  updatedAt DateTime @updatedAt @map("updated_at")
+
+  @@index([memberId, createdAt])
+  @@index([status])
+  @@map("reward_redemptions")
+}

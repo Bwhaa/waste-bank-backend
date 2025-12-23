@@ -1,0 +1,18 @@
+version: '3.9'
+
+services:
+  postgres:
+    image: postgres:15
+    container_name: waste-bank-postgres
+    restart: unless-stopped
+    ports:
+      - '5432:5432'
+    environment:
+      POSTGRES_USER: wastebank
+      POSTGRES_PASSWORD: wastebank
+      POSTGRES_DB: waste_bank
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+
+volumes:
+  postgres_data:

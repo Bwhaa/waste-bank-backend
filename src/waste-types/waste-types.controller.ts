@@ -7,8 +7,7 @@ import {
   Param,
   Delete,
   ParseIntPipe,
-  HttpCode,
-  HttpStatus,
+  UseGuards,
 } from '@nestjs/common';
 import { WasteTypesService } from './waste-types.service';
 import { CreateWasteTypeDto } from './dto/create-waste-type.dto';
@@ -18,68 +17,75 @@ import {
   ApiTags,
   ApiOperation,
   ApiResponse,
-  ApiBody,
 } from '@nestjs/swagger';
-import { WasteType } from '@prisma/client';
+import { WasteType, UserRole } from '@prisma/client';
 
-@ApiTags('Waste Types (Master Data)')
+// 👇 1. Import ของใหม่ (ลบ RoleGuard ตัวเก่าทิ้ง)
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator'; // 👈 ใช้ Decorator
+
+@ApiTags('Waste Types (ราคารับซื้อขยะ)')
 @Controller('waste-types')
 export class WasteTypesController {
   constructor(private readonly wasteTypesService: WasteTypesService) {}
 
-  @Post()
-  @ApiBearerAuth()
-  @ApiOperation({ summary: 'สร้างประเภทขยะใหม่ (Admin Only)' })
-  @ApiResponse({
-    status: 201,
-    description: 'สร้างสำเร็จ',
-    type: CreateWasteTypeDto,
-  })
-  @ApiResponse({
-    status: 400,
-    description: 'ข้อมูลไม่ถูกต้อง (Validation Error)',
-  })
-  @ApiResponse({ status: 409, description: 'ชื่อขยะซ้ำกัน (Duplicate)' })
-  async create(
-    @Body() createWasteTypeDto: CreateWasteTypeDto,
-  ): Promise<WasteType> {
-    return this.wasteTypesService.create(createWasteTypeDto);
-  }
+  // ---------------------------------------------------
+  // 🔓 Public Zone (ดูได้ทุกคน)
+  // ---------------------------------------------------
 
   @Get()
-  @ApiOperation({ summary: 'ดึงรายการขยะทั้งหมด (Public)' })
-  @ApiResponse({ status: 200, description: 'ดึงข้อมูลสำเร็จ' })
+  @ApiOperation({ summary: 'ดึงรายการขยะทั้งหมด (เฉพาะที่ Active)' })
   async findAll(): Promise<WasteType[]> {
     return this.wasteTypesService.findAll();
   }
 
   @Get(':id')
   @ApiOperation({ summary: 'ดูรายละเอียดขยะตาม ID' })
-  @ApiResponse({ status: 200, description: 'เจอข้อมูล' })
-  @ApiResponse({ status: 404, description: 'ไม่พบข้อมูล (Not found)' })
   async findOne(@Param('id', ParseIntPipe) id: number): Promise<WasteType> {
     return this.wasteTypesService.findOne(id);
   }
 
-  @Patch(':id')
+  // ---------------------------------------------------
+  // 🔒 Admin Zone (ต้อง Login + Admin)
+  // ---------------------------------------------------
+
+  @Get('admin/all')
+  @UseGuards(JwtAuthGuard, RolesGuard) // 🛡️ 2. ใช้ Guard คู่หู
+  @Roles(UserRole.ADMIN) // 🏷️ 3. ระบุ Role
   @ApiBearerAuth()
-  @ApiOperation({ summary: 'แก้ไขราคา/ข้อมูลขยะ (Admin Only)' })
-  @ApiResponse({ status: 200, description: 'แก้ไขสำเร็จ' })
-  @ApiResponse({ status: 400, description: 'Validation Error' })
-  @ApiResponse({ status: 404, description: 'ไม่พบข้อมูล' })
-  @ApiResponse({ status: 409, description: 'ชื่อซ้ำ' })
+  @ApiOperation({ summary: 'ดึงรายการทั้งหมดรวมที่ปิดใช้งาน (Admin Only)' })
+  async findAllForAdmin(): Promise<WasteType[]> {
+    return this.wasteTypesService.findAllForAdmin();
+  }
+
+  @Post()
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'สร้างประเภทขยะใหม่' })
+  @ApiResponse({ status: 201, description: 'สร้างสำเร็จ' })
+  async create(@Body() dto: CreateWasteTypeDto): Promise<WasteType> {
+    return this.wasteTypesService.create(dto);
+  }
+
+  @Patch(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
+  @ApiBearerAuth()
+  @ApiOperation({ summary: 'แก้ไขราคา/ข้อมูลขยะ' })
   async update(
     @Param('id', ParseIntPipe) id: number,
-    @Body() updateWasteTypeDto: UpdateWasteTypeDto,
+    @Body() dto: UpdateWasteTypeDto,
   ): Promise<WasteType> {
-    return this.wasteTypesService.update(id, updateWasteTypeDto);
+    return this.wasteTypesService.update(id, dto);
   }
 
   @Delete(':id')
+  @UseGuards(JwtAuthGuard, RolesGuard)
+  @Roles(UserRole.ADMIN)
   @ApiBearerAuth()
   @ApiOperation({ summary: 'ลบประเภทขยะ (Soft Delete)' })
-  @ApiResponse({ status: 200, description: 'ลบสำเร็จ (Soft Delete)' })
-  @ApiResponse({ status: 404, description: 'ไม่พบข้อมูล หรือถูกลบไปแล้ว' })
   async remove(@Param('id', ParseIntPipe) id: number): Promise<WasteType> {
     return this.wasteTypesService.remove(id);
   }

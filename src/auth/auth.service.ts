@@ -58,13 +58,20 @@ export class AuthService {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // 1. เช็ครหัสผ่าน
     const isMatch = await bcrypt.compare(pass, member.password);
     if (!isMatch) {
       throw new UnauthorizedException('Invalid credentials');
     }
 
+    // 2. เช็คสถานะแบน
     if (member.status === MemberStatus.BANNED) {
       throw new ForbiddenException('Account is banned');
+    }
+
+    // ➕ 3. เพิ่มเช็ค Soft Delete (เผื่อ Staff คนนี้ลาออกแล้วเราปิด Account ไป)
+    if (!member.isActive) {
+      throw new ForbiddenException('Account is disabled');
     }
 
     return this.generateTokens(member.id, member.role);

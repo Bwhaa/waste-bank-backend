@@ -1,6 +1,7 @@
 import {
   Controller,
   Post,
+  Get,
   Patch,
   Param,
   UseGuards,
@@ -10,9 +11,6 @@ import {
   HttpStatus,
 } from '@nestjs/common';
 import { RedeemService } from './redeem.service';
-import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
-import { RoleGuard } from '../auth/guards/role.guard';
-import { User } from '../common/decorators/user.decorator';
 import { UserRole } from '@prisma/client';
 import {
   ApiTags,
@@ -21,55 +19,58 @@ import {
   ApiBearerAuth,
 } from '@nestjs/swagger';
 
-interface UserPayload {
-  id: string;
-  role: UserRole;
-}
+// Import ของใหม่มาตรฐานของเรา
+import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
+import { RolesGuard } from 'src/auth/guards/roles.guard';
+import { Roles } from '../auth/decorators/roles.decorator';
+import { CurrentUser } from 'src/auth/current-user.decorator';
 
 @ApiTags('Redeems (แลกของรางวัล)')
 @Controller('redeems')
-@UseGuards(JwtAuthGuard)
+@UseGuards(JwtAuthGuard, RolesGuard)
 @ApiBearerAuth()
 export class RedeemController {
   constructor(private readonly redeemService: RedeemService) {}
 
-  @Post(':rewardId')
-  @UseGuards(RoleGuard(UserRole.MEMBER)) // เฉพาะ Member แลกได้
-  @ApiOperation({ summary: 'สมาชิกกดแลกของรางวัล (ตัดแต้มทันที)' })
-  @ApiResponse({
-    status: 201,
-    description: 'สร้างรายการแลกสำเร็จ (สถานะ REQUESTED)',
+  @Get('admin/pending')
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK) // ✅ 200: ดึงข้อมูลสำเร็จ
+  @ApiOperation({
+    summary: 'ดูรายการคำขอแลกของรางวัลที่รออนุมัติ (Staff/Admin)',
   })
-  @ApiResponse({ status: 400, description: 'แต้มไม่พอ หรือของหมด' })
-  redeem(
+  async getPending() {
+    return this.redeemService.findAllPending();
+  }
+
+  @Post(':rewardId')
+  @Roles(UserRole.MEMBER)
+  @HttpCode(HttpStatus.CREATED) // ✅ 201: สร้างคำขอใหม่สำเร็จ
+  @ApiOperation({ summary: 'สมาชิกกดแลกของรางวัล (ตัดแต้มทันที)' })
+  async redeem(
     @Param('rewardId', ParseIntPipe) rewardId: number,
-    @User() user: UserPayload,
+    @CurrentUser() user: { id: string },
   ) {
     return this.redeemService.redeem(user.id, rewardId);
   }
 
   @Patch(':id/approve')
-  @UseGuards(RoleGuard(UserRole.STAFF, UserRole.ADMIN))
-  @ApiOperation({ summary: 'อนุมัติการแลก (ตัด Stock) - Staff Only' })
-  @ApiResponse({ status: 200, description: 'อนุมัติสำเร็จ' })
-  @ApiResponse({
-    status: 400,
-    description: 'สถานะไม่ถูกต้อง หรือของหมดระหว่างรอ',
-  })
-  approve(
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK) // ✅ 200: อัปเดตสถานะสำเร็จ
+  @ApiOperation({ summary: 'อนุมัติการแลก (ส่งของแล้ว) - Staff Only' })
+  async approve(
     @Param('id', ParseUUIDPipe) redemptionId: string,
-    @User() user: UserPayload,
+    @CurrentUser() user: { id: string },
   ) {
     return this.redeemService.approve(redemptionId, user.id);
   }
 
   @Patch(':id/reject')
-  @UseGuards(RoleGuard(UserRole.STAFF, UserRole.ADMIN))
+  @Roles(UserRole.STAFF, UserRole.ADMIN)
+  @HttpCode(HttpStatus.OK) // ✅ 200: ปฏิเสธและคืนแต้มสำเร็จ
   @ApiOperation({ summary: 'ปฏิเสธการแลก (คืนแต้มให้ลูกค้า) - Staff Only' })
-  @ApiResponse({ status: 200, description: 'ปฏิเสธและคืนแต้มสำเร็จ' })
-  reject(
+  async reject(
     @Param('id', ParseUUIDPipe) redemptionId: string,
-    @User() user: UserPayload,
+    @CurrentUser() user: { id: string },
   ) {
     return this.redeemService.reject(redemptionId, user.id);
   }

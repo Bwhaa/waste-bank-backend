@@ -5,9 +5,10 @@ import { ScheduleModule } from '@nestjs/schedule';
 import { PointsModule } from './points/points.module';
 import { RedeemModule } from './redeem/redeem.module';
 import { AuthModule } from './auth/auth.module';
-import { WasteCategory } from '@prisma/client';
 import { WasteTypesModule } from './waste-types/waste-types.module';
 import { DashboardModule } from './dashboard/dashboard.module';
+import { ProfileModule } from './profile/profile.module';
+import { RewardsModule } from './rewards/rewards.module';
 
 @Module({
   imports: [
@@ -19,6 +20,8 @@ import { DashboardModule } from './dashboard/dashboard.module';
     AuthModule,
     WasteTypesModule,
     DashboardModule,
+    ProfileModule,
+    RewardsModule,
   ],
   controllers: [],
   providers: [],

@@ -85,6 +85,7 @@ model Member {
   firstName String  @map("first_name")
   lastName  String  @map("last_name")
   phoneNumber String? @map("phone_number")
+  address     String? @db.Text
   
   qrCode   String? @unique @map("qr_code") // ใส่ ? เผื่อไว้ก่อนตอน Seed ยังไม่มี QR
 

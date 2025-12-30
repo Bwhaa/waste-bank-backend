@@ -25,7 +25,7 @@ export class DepositItemDto {
     description: 'น้ำหนัก (KG) หรือปริมาณที่รับฝาก',
   })
   @IsNumber()
-  @Min(0.1)
+  @Min(0.1, { message: 'จำนวนต้องมากกว่า 0.1' })
   amount: number;
 }
 
@@ -34,7 +34,7 @@ export class CreateDepositDto {
     example: '123e4567-e89b-12d3-a456-426614174000',
     description: 'ID ของสมาชิก (Member) ที่เอาขยะมาฝาก',
   })
-  @IsString()
+  @IsUUID()
   @IsNotEmpty()
   memberId: string;
 

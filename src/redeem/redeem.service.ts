@@ -18,11 +18,35 @@ export class RedeemService {
   private readonly logger = new Logger(RedeemService.name);
 
   constructor(private readonly prisma: PrismaService) {}
-
+  async findAllPending() {
+    return this.prisma.rewardRedemption.findMany({
+      where: { status: RedemptionStatus.REQUESTED },
+      include: {
+        member: {
+          select: { firstName: true, lastName: true, email: true },
+        },
+        reward: {
+          select: { id: true, name: true, imageUrl: true, costPoint: true },
+        },
+      },
+      orderBy: { createdAt: 'desc' },
+    });
+  }
+  // 1. Redeem: ตัดแต้ม + ตัดของ ทันที ⚡️
   async redeem(memberId: string, rewardId: number) {
     return this.prisma.$transaction(async (tx) => {
+      // 1.1 เช็คของรางวัล
       const reward = await tx.reward.findUnique({
         where: { id: rewardId },
+        // เพิ่มการ select version มาด้วย ไม่งั้นตอน update ขั้นตอน 1.3 จะ error
+        select: {
+          id: true,
+          name: true,
+          costPoint: true,
+          stock: true,
+          isActive: true,
+          version: true,
+        },
       });
 
       if (!reward || !reward.isActive) {
@@ -32,28 +56,59 @@ export class RedeemService {
         throw new BadRequestException('Reward is out of stock');
       }
 
+      // 1.2 เช็คสมาชิก
       const member = await tx.member.findUnique({
         where: { id: memberId },
-        select: {
-          id: true,
-          currentPoints: true,
-          version: true,
-          status: true,
-        },
+        select: { id: true, currentPoints: true, version: true, status: true },
       });
 
       if (!member) throw new NotFoundException('Member not found');
-
       if (member.status === MemberStatus.BANNED) {
         throw new ForbiddenException('Member is banned');
       }
-
       if (member.currentPoints < reward.costPoint) {
         throw new BadRequestException(
           `Not enough points. Required: ${reward.costPoint}, Current: ${member.currentPoints}`,
         );
       }
 
+      // 1.3 🔥 ตัด Stock ทันที (Optimistic Lock)
+      try {
+        await tx.reward.update({
+          where: {
+            id: rewardId,
+            version: reward.version, // กันคนแย่งกันกด
+          },
+          data: {
+            stock: { decrement: 1 },
+            version: { increment: 1 },
+          },
+        });
+      } catch (error) {
+        throw new ConflictException(
+          'Item was just taken by someone else. Please try again.',
+        );
+      }
+
+      // 1.4 หักแต้มสมาชิก
+      const newBalance = member.currentPoints - reward.costPoint;
+
+      try {
+        await tx.member.update({
+          where: { id: memberId, version: member.version },
+          data: {
+            currentPoints: newBalance,
+            version: { increment: 1 },
+          },
+        });
+      } catch (error) {
+        // ถ้าตัดแต้มไม่ผ่าน (เช่นแต้มเปลี่ยน) ต้อง Rollback ทั้งหมด (Prisma ทำให้อัตโนมัติ)
+        throw new ConflictException(
+          'Member points updated by another process.',
+        );
+      }
+
+      // 1.5 สร้างใบคำขอแลก
       const redemption = await tx.rewardRedemption.create({
         data: {
           memberId,
@@ -63,8 +118,7 @@ export class RedeemService {
         },
       });
 
-      const newBalance = member.currentPoints - reward.costPoint;
-
+      // 1.6 บันทึก Transaction การเงิน
       await tx.pointTransaction.create({
         data: {
           memberId,
@@ -73,29 +127,12 @@ export class RedeemService {
           balanceAfter: newBalance,
           redemptionId: redemption.id,
           createdBy: memberId,
+          detail: `Redeem reward: ${reward.name}`,
         },
       });
 
-      try {
-        await tx.member.update({
-          where: {
-            id: memberId,
-            version: member.version,
-          },
-          data: {
-            currentPoints: newBalance,
-            version: { increment: 1 },
-          },
-        });
-      } catch (error) {
-        this.logger.error(
-          `Conflict redeeming reward ${rewardId} for member ${memberId}`,
-        );
-        throw new ConflictException('Transaction conflict. Please try again.');
-      }
-
       this.logger.log(
-        `Member ${memberId} requested reward ${rewardId} (Redemption ID: ${redemption.id})`,
+        `Member ${memberId} redeemed ${rewardId} (Redemption ID: ${redemption.id})`,
       );
 
       return {
@@ -106,15 +143,11 @@ export class RedeemService {
     });
   }
 
+  // 2. Approve: แค่เปลี่ยนสถานะ (ของตัดไปแล้ว) ✅
   async approve(redemptionId: string, staffId: string) {
     return this.prisma.$transaction(async (tx) => {
       const redemption = await tx.rewardRedemption.findUnique({
         where: { id: redemptionId },
-        include: {
-          reward: {
-            select: { id: true, stock: true, version: true, name: true },
-          },
-        },
       });
 
       if (!redemption) throw new NotFoundException('Redemption not found');
@@ -125,27 +158,7 @@ export class RedeemService {
         );
       }
 
-      if (redemption.reward.stock <= 0) {
-        throw new BadRequestException(
-          `Reward '${redemption.reward.name}' is out of stock.`,
-        );
-      }
-
-      try {
-        await tx.reward.update({
-          where: {
-            id: redemption.reward.id,
-            version: redemption.reward.version,
-          },
-          data: {
-            stock: { decrement: 1 },
-            version: { increment: 1 },
-          },
-        });
-      } catch (error) {
-        throw new ConflictException('Reward stock updated by another process.');
-      }
-
+      // อัปเดตสถานะเป็น COMPLETED จบงาน
       await tx.rewardRedemption.update({
         where: { id: redemptionId },
         data: {
@@ -166,13 +179,20 @@ export class RedeemService {
     });
   }
 
+  // 3. Reject: คืนแต้ม + คืนของ ↩️
+  // 3. Reject: คืนแต้ม + คืนของ ↩️
   async reject(redemptionId: string, staffId: string) {
     return this.prisma.$transaction(async (tx) => {
+      // --- แก้ไขจุดที่ 2: มั่นใจว่าดึง version ของ member มาด้วย ---
       const redemption = await tx.rewardRedemption.findUnique({
         where: { id: redemptionId },
         include: {
           member: {
-            select: { id: true, currentPoints: true, version: true },
+            select: {
+              id: true,
+              currentPoints: true,
+              version: true, // <--- สำคัญมากสำหรับ Optimistic Lock ตอนคืนแต้ม
+            },
           },
         },
       });
@@ -185,9 +205,11 @@ export class RedeemService {
         );
       }
 
+      // 3.1 คืนแต้มให้ Member
       const refundPoint = redemption.pointUsed;
       const newBalance = redemption.member.currentPoints + refundPoint;
 
+      // บันทึก Log การคืนเงิน
       await tx.pointTransaction.create({
         data: {
           memberId: redemption.memberId,
@@ -196,6 +218,7 @@ export class RedeemService {
           balanceAfter: newBalance,
           redemptionId: redemption.id,
           createdBy: staffId,
+          detail: `Refund from rejected redemption #${redemptionId}`,
         },
       });
 
@@ -203,17 +226,27 @@ export class RedeemService {
         await tx.member.update({
           where: {
             id: redemption.memberId,
-            version: redemption.member.version,
+            version: redemption.member.version, // ใช้ version ที่ดึงมาเช็ค
           },
           data: {
             currentPoints: newBalance,
-            version: { increment: 1 },
+            version: { increment: 1 }, // อัปเดต version หนีไปอีก 1 step
           },
         });
       } catch (error) {
         throw new ConflictException('Member data changed during rejection.');
       }
 
+      // --- แก้ไขจุดที่ 3: คืนของเข้า Stock และอัปเดต Version ของ Reward ---
+      await tx.reward.update({
+        where: { id: redemption.rewardId },
+        data: {
+          stock: { increment: 1 },
+          version: { increment: 1 }, // <--- เพิ่มตรงนี้เพื่อให้ระบบอื่นรู้ว่าข้อมูลเปลี่ยน
+        },
+      });
+
+      // 3.3 อัปเดตสถานะใบคำขอเป็น REJECTED
       await tx.rewardRedemption.update({
         where: { id: redemptionId },
         data: {
@@ -223,7 +256,7 @@ export class RedeemService {
       });
 
       this.logger.log(
-        `Redemption ${redemptionId} REJECTED by staff ${staffId} (Refunded ${refundPoint} points)`,
+        `Redemption ${redemptionId} REJECTED by staff ${staffId}`,
       );
 
       return {

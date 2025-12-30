@@ -18,6 +18,7 @@ export class WasteTypesService {
 
   async create(data: CreateWasteTypeDto) {
     try {
+      // ✅ Mapping เองแบบนี้ปลอดภัยดีครับ กัน field แปลกปลอม
       return await this.prisma.wasteType.create({
         data: {
           name: data.name,
@@ -28,6 +29,7 @@ export class WasteTypesService {
           minAmount: data.minAmount,
           description: data.description,
           imageUrl: data.imageUrl,
+          isActive: true, // Default active
         },
       });
     } catch (error) {
@@ -48,6 +50,7 @@ export class WasteTypesService {
     }
   }
 
+  // สำหรับ User ทั่วไป (เห็นแค่ที่ Active)
   async findAll() {
     return this.prisma.wasteType.findMany({
       where: { isActive: true },
@@ -55,6 +58,15 @@ export class WasteTypesService {
     });
   }
 
+  // สำหรับ Admin (เห็นทั้งหมด รวมถึงที่ลบไปแล้ว)
+  // 💡 เพิ่ม Method นี้เพื่อให้ Admin บริหารจัดการได้ง่ายขึ้น
+  async findAllForAdmin() {
+    return this.prisma.wasteType.findMany({
+      orderBy: { id: 'asc' },
+    });
+  }
+
+  // สำหรับ User/Public (ดูได้เฉพาะ Active)
   async findOne(id: number) {
     const wasteType = await this.prisma.wasteType.findUnique({ where: { id } });
 
@@ -64,9 +76,16 @@ export class WasteTypesService {
     return wasteType;
   }
 
+  // 🛠️ แก้ไข Logic Update: ให้สามารถแก้ของที่ Inactive ได้ (เพื่อ Re-activate)
   async update(id: number, data: UpdateWasteTypeDto) {
-    await this.findOne(id);
+    // 1. เช็คว่ามี ID นี้ใน DB จริงไหม (ไม่สนใจ isActive)
+    const existing = await this.prisma.wasteType.findUnique({ where: { id } });
 
+    if (!existing) {
+      throw new NotFoundException(`Waste type with ID ${id} not found`);
+    }
+
+    // 2. ทำการ Update
     try {
       return await this.prisma.wasteType.update({
         where: { id },
@@ -85,7 +104,9 @@ export class WasteTypesService {
   }
 
   async remove(id: number) {
-    await this.findOne(id);
+    // เช็คก่อนว่ามีของไหม (ใช้ logic เดียวกับ update คือเจอหมด)
+    const existing = await this.prisma.wasteType.findUnique({ where: { id } });
+    if (!existing) throw new NotFoundException(`Waste type #${id} not found`);
 
     return this.prisma.wasteType.update({
       where: { id },
